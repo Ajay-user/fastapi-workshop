@@ -6,6 +6,9 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+
+from schemas import PostCreate, PostResponse
+
  
 app = FastAPI()
 app.mount(path='/static', app=StaticFiles(directory='static'), name='static')
@@ -36,7 +39,7 @@ def home(request:Request):
     return templates.TemplateResponse(request=request, name='home.html', context={'posts':POST, 'title':"Home"})
 
 
-@app.get('/post/{post_id}', name='post_page')
+@app.get('/post/{post_id}', name='post_page', include_in_schema=False)
 def post_page(request:Request, post_id:int):
     for post in POST:
         if post.get('id') == post_id:
@@ -51,19 +54,30 @@ def post_page(request:Request, post_id:int):
 
 #  -- API
 
-
-@app.get('/api/post')
+# GET all post
+@app.get('/api/post', response_model=list[PostResponse])
 def get_all_post():
     return POST
 
-@app.get('/api/post/{post_id}')
+# GET a post
+@app.get('/api/post/{post_id}', response_model=PostResponse)
 def get_post(post_id:int):
     for post in POST:
         if post.get('id') == post_id:
-            return {'status':200, 'content':post}
+            return JSONResponse(status_code=status.HTTP_200_OK, content=post)
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Post ID not found')
 
+# Create new POST
+@app.post('/api/post', response_model=PostResponse)
+def create_post(post:PostCreate):
+    id_ = max([item['id'] for item in POST]) + 1
+    ITEM = post.model_dump()
+    ITEM['id'] = id_
+    ITEM['date_posted'] = "Apri 12, 2025"
+    POST.append(ITEM)
+    return JSONResponse(status_code=status.HTTP_200_OK, content=ITEM)
 
+# ---
 
 # EXCEPTION HANDLER 
 @app.exception_handler(StarletteHTTPException)
