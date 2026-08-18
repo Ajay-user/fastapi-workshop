@@ -1,4 +1,6 @@
-from fastapi import FastAPI, status
+from typing import Annotated
+
+from fastapi import FastAPI, status, Depends
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
@@ -7,77 +9,144 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
-from schemas import PostCreate, PostResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from database import Base, engine, get_db
+from schemas import PostCreate, PostResponse, UserCreate, UserResponse
+from models import User , Post
+
+Base.metadata.create_all(bind=engine)
  
 app = FastAPI()
+# static file serving
 app.mount(path='/static', app=StaticFiles(directory='static'), name='static')
+# user uploaded media
+app.mount(path='/media', app=StaticFiles(directory='media'), name='media')
 templates = Jinja2Templates(directory='templates')
 
 
 
-POST : list[dict] = [
-    {
-        "id": 1,
-        "author": "Corey Schafer",
-        "title": "FastAPI is Awesome",
-        "content": "This framework is really easy to use and super fast.",
-        "date_posted": "April 20, 2025",
-    },
-    {
-        "id": 2,
-        "author": "Jane Doe",
-        "title": "Python is Great for Web Development",
-        "content": "Python is a great language for web development, and FastAPI makes it even better.",
-        "date_posted": "April 21, 2025",
-    },
-]
+
 
 @app.get('/', include_in_schema=False)
 @app.get('/post', include_in_schema=False)
-def home(request:Request):
-    return templates.TemplateResponse(request=request, name='home.html', context={'posts':POST, 'title':"Home"})
+def home(request:Request, db:Annotated[Session, Depends(get_db)]):
+    posts = db.execute(select(Post)).scalars().all()
+    return templates.TemplateResponse(request=request, name='home.html', context={'posts':posts, 'title':"Home"})
 
 
 @app.get('/post/{post_id}', name='post_page', include_in_schema=False)
-def post_page(request:Request, post_id:int):
-    for post in POST:
-        if post.get('id') == post_id:
-            return templates.TemplateResponse(
-                request=request, name='post.html', 
-                context={'post':post, 'title': post['title']}
-            )
+def post_page(request:Request, post_id:int, db:Annotated[Session, Depends(get_db)]):
+    
+    if post:= db.execute(select(Post).where(Post.id == post_id)).scalars().first():
+        return templates.TemplateResponse(
+            request=request, name='post.html', 
+            context={'post':post, 'title': post['title']}
+        )
+    
     return templates.TemplateResponse(
         request=request, name='error.html',
         context={'title':'404', 'status_code':404, 'message':'Post Not Found'}
     )
 
+@app.get('/user/{user_id}/post', name='user_post_page', include_in_schema=False)
+def user_post_page(request:Request, user_id:int, db:Annotated[Session, Depends(get_db)]):
+
+    # check if user exist
+    if existing_user:= db.execute(select(User).where(User.id == user_id)).scalars().first():
+        posts = db.execute(select(Post).where(Post.user_id == user_id)).scalars().all()
+
+        return templates.TemplateResponse(
+            request=request, name='user_posts.html', 
+            context={'posts':posts, 'user':existing_user, 'title': f"{existing_user.username}'s posts"}
+        )
+    
+    return templates.TemplateResponse(
+        request=request, name='error.html',
+        context={'title':'404', 'status_code':404, 'message':'User ID Not Found'}
+    )
+
+
+
+
 #  -- API
+
+# Create a new user
+@app.post('/api/user', response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(user:UserCreate, db:Annotated[Session, Depends(get_db)]):
+
+    # check if username already exists in db
+    if existing_username:= db.execute(select(User).where(User.username == user.username)).scalars().first():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Username alread exists')
+    # check if email already exists in db
+    if existing_email:= db.execute(select(User).where(User.email == user.email)).scalars().first():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Email alread exists')
+
+    new_user = User(**user.model_dump())
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return new_user
+
+
+# Get a user
+@app.get('/api/user/{user_id}', response_model=UserResponse, status_code=status.HTTP_200_OK)
+def get_user(user_id:int, db:Annotated[Session, Depends(get_db)]):
+
+    if existing_user:= db.execute(select(User).where(User.id == user_id)).scalars().first():
+        return existing_user
+    
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+
+# Get user posts
+@app.get('/api/user/{user_id}/post', response_model=PostResponse, status_code=status.HTTP_201_CREATED)
+def get_user_post(user_id:int, db:Annotated[Session,  Depends(get_db)]):
+    # check if user exist
+    if existing_user:= db.execute(select(User).where(User.id == user_id)).scalars().first():
+        posts = db.execute(select(Post).where(Post.user_id == user_id)).scalars().all()
+        return posts
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+
+
+
 
 # GET all post
 @app.get('/api/post', response_model=list[PostResponse])
-def get_all_post():
-    return POST
-
+def get_all_post(db:Annotated[Session, Depends(get_db)]):
+    if posts:= db.execute(select(Post)).scalars().all():
+        return posts
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    
 # GET a post
 @app.get('/api/post/{post_id}', response_model=PostResponse)
-def get_post(post_id:int):
-    for post in POST:
-        if post.get('id') == post_id:
-            return JSONResponse(status_code=status.HTTP_200_OK, content=post)
+def get_post(post_id:int, db:Annotated[Session, Depends(get_db)]):
+    if post:= db.execute(select(Post).where(Post.id == post_id)).scalars().first():
+        return post
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Post ID not found')
 
 # Create new POST
 @app.post('/api/post', response_model=PostResponse)
-def create_post(post:PostCreate):
-    id_ = max([item['id'] for item in POST]) + 1
-    ITEM = post.model_dump()
-    ITEM['id'] = id_
-    ITEM['date_posted'] = "Apri 12, 2025"
-    POST.append(ITEM)
-    return JSONResponse(status_code=status.HTTP_200_OK, content=ITEM)
+def create_post(post:PostCreate, db:Annotated[Session, Depends(get_db)]):
 
-# ---
+    # check if user exist
+    if existing_user:= db.execute(select(User).where(User.id == post.user_id)).scalars().first():
+
+        post = Post(**post.model_dump())
+        db.add(post)
+        db.commit()
+        db.refresh(post)
+        return post
+    
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User details not found, check ID')
+
+
+# --- 
 
 # EXCEPTION HANDLER 
 @app.exception_handler(StarletteHTTPException)
