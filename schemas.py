@@ -12,6 +12,11 @@ class PostBase(BaseModel):
 class PostCreate(PostBase):
     user_id : int # TEMP
 
+# For PATCH
+class PostUpdate(PostBase):
+    title:str|None = None
+    content:str|None = None
+
 class PostResponse(PostBase):
 
     model_config = ConfigDict(from_attributes=True)
@@ -29,6 +34,12 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     pass
+
+# For PATCH
+class UserUpdate(UserBase):
+    username:str|None = None
+    email:EmailStr|None = None
+    image_file:str|None = None
 
 class UserResponse(UserBase):
     model_config = ConfigDict(from_attributes=True)
